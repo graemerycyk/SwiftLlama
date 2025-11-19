@@ -11,6 +11,20 @@ class LlamaModel {
     private var generatedTokenAccount: Int32 = 0
     private var ended = false
     private let n_len: Int32 = 1024
+    
+    private lazy var isEncoderOnlyModel: Bool = {
+        let hasEncoder = llama_model_has_encoder(model)
+        let hasDecoder = llama_model_has_decoder(model)
+        if hasEncoder && !hasDecoder {
+            return true
+        }
+        if let architecture = modelMetadataValue(for: "general.architecture")?.lowercased() {
+            return architecture.contains("bert") ||
+            architecture.contains("encoder") ||
+            architecture.contains("embed")
+        }
+        return false
+    }()
 
     var shouldContinue: Bool {
         generatedTokenAccount < configuration.maxTokenCount && !ended
@@ -133,6 +147,19 @@ class LlamaModel {
             )
         }
     }
+    
+    private func modelMetadataValue(for key: String) -> String? {
+        var buffer = [CChar](repeating: 0, count: 256)
+        let result = buffer.withUnsafeMutableBufferPointer { buf -> Int32 in
+            guard let baseAddress = buf.baseAddress else { return -1 }
+            return key.withCString { keyPtr -> Int32 in
+                llama_model_meta_val_str(model, keyPtr, baseAddress, buf.count)
+            }
+        }
+        guard result >= 0 else { return nil }
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
 
     func clear() {
         tokens.removeAll()
@@ -146,54 +173,121 @@ class LlamaModel {
     /// - Returns: Normalized embedding vector as [Float]
     /// - Throws: SwiftLlamaError if embedding extraction fails
     func extractEmbedding(for text: String) throws -> [Float] {
-        // Get embedding dimension from model
-        let embeddingDim = llama_n_embd(model)
-        
+        let embeddingDim = Int(llama_n_embd(model))
         guard embeddingDim > 0 else {
             throw SwiftLlamaError.invalidEmbeddingDimension
         }
         
-        // Tokenize the input text
         let tokens = tokenize(text: text, addBos: true)
-        
         guard !tokens.isEmpty else {
             throw SwiftLlamaError.tokenizationFailed
         }
         
-        // Create batch for embeddings
+        let requiresMeanPooling = isEncoderOnlyModel
+        let embeddingContext = try makeEmbeddingContext(tokenCount: tokens.count,
+                                                        meanPooling: requiresMeanPooling)
+        defer { llama_free(embeddingContext) }
+        
         var embeddingBatch = llama_batch_init(Int32(tokens.count), 0, 1)
         defer { llama_batch_free(embeddingBatch) }
         
-        // Add tokens to batch
-        for (i, token) in tokens.enumerated() {
-            embeddingBatch.add(token: token, position: Int32(i), seqIDs: [0], logit: false)
+        for (index, token) in tokens.enumerated() {
+            embeddingBatch.add(token: token,
+                               position: Int32(index),
+                               seqIDs: [0],
+                               logit: true)
         }
         
-        // Enable embeddings mode
-        llama_set_embeddings(context, true)
-        defer {
-            // Always restore to generation mode
-            llama_set_embeddings(context, false)
+        llama_set_embeddings(embeddingContext, true)
+        defer { llama_set_embeddings(embeddingContext, false) }
+        
+        guard llama_decode(embeddingContext, embeddingBatch) == 0 else {
+            throw SwiftLlamaError.embeddingExtractionFailed("Failed to decode tokens for embeddings")
         }
         
-        // Decode to generate embeddings
-        guard llama_decode(context, embeddingBatch) == 0 else {
-            throw SwiftLlamaError.embeddingExtractionFailed("Failed to decode for embeddings")
+        let tokenCount = Int(embeddingBatch.n_tokens)
+        let embeddings: [Float]
+        if requiresMeanPooling {
+            embeddings = try meanPoolEmbeddings(from: embeddingContext,
+                                                tokenCount: tokenCount,
+                                                embeddingDimension: embeddingDim)
+        } else {
+            embeddings = try lastTokenEmbedding(from: embeddingContext,
+                                                tokenCount: tokenCount,
+                                                embeddingDimension: embeddingDim)
         }
         
-        // Get the embedding pointer
-        guard let embeddingPtr = llama_get_embeddings(context) else {
-            throw SwiftLlamaError.embeddingExtractionFailed("Failed to get embeddings from context")
+        return normalize(embeddings)
+    }
+    
+    private func makeEmbeddingContext(tokenCount: Int,
+                                      meanPooling: Bool) throws -> Context {
+        var params = configuration.contextParameters
+        params.embeddings = true
+        
+        let requiredContext = UInt32(max(tokenCount + 2, 8))
+        params.n_ctx = max(params.n_ctx, requiredContext)
+        
+        let requiredBatch = UInt32(max(tokenCount, 1))
+        params.n_batch = max(params.n_batch, requiredBatch)
+        params.n_ubatch = max(params.n_ubatch, requiredBatch)
+        params.n_seq_max = max(params.n_seq_max, 1)
+        params.pooling_type = meanPooling ? LLAMA_POOLING_TYPE_MEAN : LLAMA_POOLING_TYPE_NONE
+        
+        guard let ctx = llama_new_context_with_model(model, params) else {
+            throw SwiftLlamaError.embeddingExtractionFailed("Failed to create embedding context")
+        }
+        return ctx
+    }
+    
+    private func meanPoolEmbeddings(from context: Context,
+                                    tokenCount: Int,
+                                    embeddingDimension: Int) throws -> [Float] {
+        if let pooledPointer = llama_get_embeddings_seq(context, 0) {
+            return copyEmbedding(from: pooledPointer, dimension: embeddingDimension)
         }
         
-        // Copy embeddings to Float array
-        var embedding = [Float](repeating: 0, count: Int(embeddingDim))
-        for i in 0..<Int(embeddingDim) {
-            embedding[i] = embeddingPtr[i]
+        guard tokenCount > 0 else {
+            throw SwiftLlamaError.embeddingExtractionFailed("No tokens available for pooling")
         }
         
-        // Normalize the embedding vector (L2 normalization)
-        return normalize(embedding)
+        var accumulator = [Float](repeating: 0, count: embeddingDimension)
+        for index in 0..<tokenCount {
+            guard let tokenPointer = llama_get_embeddings_ith(context, Int32(index)) else {
+                throw SwiftLlamaError.embeddingExtractionFailed("Missing embedding for token \(index)")
+            }
+            for dimension in 0..<embeddingDimension {
+                accumulator[dimension] += tokenPointer[dimension]
+            }
+        }
+        
+        let denominator = Float(tokenCount)
+        for dimension in 0..<embeddingDimension {
+            accumulator[dimension] /= denominator
+        }
+        
+        return accumulator
+    }
+    
+    private func lastTokenEmbedding(from context: Context,
+                                    tokenCount: Int,
+                                    embeddingDimension: Int) throws -> [Float] {
+        if let pointer = llama_get_embeddings_ith(context, -1) {
+            return copyEmbedding(from: pointer, dimension: embeddingDimension)
+        }
+        
+        guard let fallback = llama_get_embeddings(context) else {
+            throw SwiftLlamaError.embeddingExtractionFailed("No embeddings were produced")
+        }
+        
+        let offset = max(tokenCount - 1, 0) * embeddingDimension
+        let advancedPointer = fallback.advanced(by: offset)
+        return copyEmbedding(from: advancedPointer, dimension: embeddingDimension)
+    }
+    
+    private func copyEmbedding(from pointer: UnsafePointer<Float>,
+                               dimension: Int) -> [Float] {
+        return Array(UnsafeBufferPointer(start: pointer, count: dimension))
     }
     
     /// Normalize a vector using L2 normalization
