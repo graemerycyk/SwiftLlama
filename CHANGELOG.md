@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- _No changes yet._
+
+## [0.6.0] - 2025-11-19
+
 ### Added
 - **Embedding Extraction Support**: New `extractEmbedding(for:)` API for extracting semantic embeddings from text
   - Returns normalized Float vectors (magnitude ≈ 1.0)
-  - Supports all embedding models compatible with llama.cpp (e.g., nomic-embed-text-v1.5)
+  - Supports embedding-ready GGUF models such as `nomic-embed-text-v1.5`
   - Uses llama.cpp's native embedding extraction functions
   - Thread-safe via `@SwiftLlamaActor`
 - New error cases for embedding-related failures:
@@ -20,12 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `SwiftLlamaError.invalidEmbeddingDimension`
 - Comprehensive embedding tests in `SwiftLlamaTests.swift`
 - Example command-line tool for testing embeddings (`test-embedding.swift`)
-- Detailed embedding extraction guide (`EMBEDDING_GUIDE.md`)
-- Updated README with embedding usage examples
+- README expanded with quick-start, workflows, troubleshooting, and testing instructions
 
 ### Changed
-- Internal `LlamaModel` now includes embedding extraction capabilities
+- Internal `LlamaModel` now includes self-contained embedding extraction capabilities (dedicated context, pooling helpers)
 - Added L2 normalization for embedding vectors
+- Consolidated documentation into a single `README.md`
 
 ## [0.4.0] - Previous Release
 
@@ -38,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Migration Guide
 
-### From 0.4.0 to Unreleased
+### From 0.4.0 to 0.6.0
 
 No breaking changes. The new embedding extraction API is additive:
 
@@ -78,5 +82,5 @@ let similarity = zip(embedding1, embedding2).reduce(0) { $0 + $1.0 * $1.1 }
 print("Similarity: \(similarity)") // ~0.7-0.9 for similar texts
 ```
 
-For detailed documentation, see [EMBEDDING_GUIDE.md](EMBEDDING_GUIDE.md).
+For detailed documentation, see the updated [README](README.md).
 

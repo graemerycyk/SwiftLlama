@@ -12,7 +12,7 @@ SwiftLlama is a Swift-first wrapper around [llama.cpp](https://github.com/ggerga
 Add SwiftLlama to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/graemerycyk/SwiftLlama.git", branch: "support-embedding-extraction")
+.package(url: "https://github.com/graemerycyk/SwiftLlama.git", from: "0.6.0")
 ```
 
 Then add `SwiftLlama` as a dependency of your target. (Use a tagged version if you’re tracking releases.)
