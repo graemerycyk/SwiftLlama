@@ -52,7 +52,7 @@ public class SwiftLlama {
         }
     }
 
-    private func response(for prompt: Prompt, output: (String) -> Void, finish: () -> Void) {
+    private func response(for prompt: Prompt, samplingParams: SamplingParameters?, output: (String) -> Void, finish: () -> Void) {
         func finaliseOutput() {
             configuration.stopTokens.forEach {
                 generatedTokenCache = generatedTokenCache.replacingOccurrences(of: $0, with: "")
@@ -63,7 +63,7 @@ public class SwiftLlama {
         }
         defer { model.clear() }
         do {
-            try model.start(for: prompt)
+            try model.start(for: prompt, samplingParams: samplingParams)
             while model.shouldContinue {
                 var delta = try model.continue()
                 if contentStarted { // remove the prefix empty spaces
@@ -122,11 +122,15 @@ public class SwiftLlama {
     }
 
     @SwiftLlamaActor
-    public func start(for prompt: Prompt, sessionSupport: Bool = false) -> AsyncThrowingStream<String, Error> {
+    public func start(
+        for prompt: Prompt,
+        sessionSupport: Bool = false,
+        samplingParams: SamplingParameters? = nil
+    ) -> AsyncThrowingStream<String, Error> {
         let sessionPrompt = prepare(sessionSupport: sessionSupport, for: prompt)
         return .init { continuation in
             Task {
-                response(for: sessionPrompt) { [weak self] delta in
+                response(for: sessionPrompt, samplingParams: samplingParams) { [weak self] delta in
                     continuation.yield(delta)
                     self?.session?.response(delta: delta)
                 } finish: { [weak self] in
@@ -138,10 +142,14 @@ public class SwiftLlama {
     }
 
     @SwiftLlamaActor
-    public func start(for prompt: Prompt, sessionSupport: Bool = false) -> AnyPublisher<String, Error> {
+    public func start(
+        for prompt: Prompt,
+        sessionSupport: Bool = false,
+        samplingParams: SamplingParameters? = nil
+    ) -> AnyPublisher<String, Error> {
         let sessionPrompt = prepare(sessionSupport: sessionSupport, for: prompt)
         Task {
-            response(for: sessionPrompt) { delta in
+            response(for: sessionPrompt, samplingParams: samplingParams) { delta in
                 resultSubject.send(delta)
                 session?.response(delta: delta)
             } finish: {
@@ -153,12 +161,64 @@ public class SwiftLlama {
     }
 
     @SwiftLlamaActor
-    public func start(for prompt: Prompt, sessionSupport: Bool = false) async throws -> String {
+    public func start(
+        for prompt: Prompt,
+        sessionSupport: Bool = false,
+        samplingParams: SamplingParameters? = nil
+    ) async throws -> String {
         var result = ""
-        for try await value in start(for: prompt) {
+        for try await value in start(for: prompt, sessionSupport: sessionSupport, samplingParams: samplingParams) as AsyncThrowingStream<String, Error> {
             result += value
         }
         return result
+    }
+    
+    // MARK: - Convenience methods with individual parameters
+    
+    /// Start inference with individual sampling parameters for convenience.
+    /// - Parameters:
+    ///   - prompt: The prompt to generate from
+    ///   - sessionSupport: Whether to maintain session context
+    ///   - temperature: Controls randomness (0.0-1.0+, lower = more focused). Default: 0.3
+    ///   - repeatPenalty: Penalizes repeated tokens (1.0 = no penalty, 1.1-1.2 typical). Default: 1.1
+    ///   - topP: Nucleus sampling threshold (0.0-1.0). Default: 0.9
+    ///   - topK: Limits vocabulary to top K tokens. Default: 40
+    /// - Returns: The generated text
+    @SwiftLlamaActor
+    public func start(
+        for prompt: Prompt,
+        sessionSupport: Bool = false,
+        temperature: Float = 0.3,
+        repeatPenalty: Float = 1.1,
+        topP: Float = 0.9,
+        topK: Int32 = 40
+    ) async throws -> String {
+        let params = SamplingParameters(
+            temperature: temperature,
+            repeatPenalty: repeatPenalty,
+            topP: topP,
+            topK: topK
+        )
+        return try await start(for: prompt, sessionSupport: sessionSupport, samplingParams: params)
+    }
+    
+    /// Start streaming inference with individual sampling parameters.
+    @SwiftLlamaActor
+    public func start(
+        for prompt: Prompt,
+        sessionSupport: Bool = false,
+        temperature: Float,
+        repeatPenalty: Float,
+        topP: Float,
+        topK: Int32
+    ) -> AsyncThrowingStream<String, Error> {
+        let params = SamplingParameters(
+            temperature: temperature,
+            repeatPenalty: repeatPenalty,
+            topP: topP,
+            topK: topK
+        )
+        return start(for: prompt, sessionSupport: sessionSupport, samplingParams: params)
     }
     
     // MARK: - Embedding Extraction

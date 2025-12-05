@@ -1,8 +1,11 @@
+// Stub header for AMX (Intel Advanced Matrix Extensions)
+// AMX is only available on Intel CPUs, not Apple Silicon
+#pragma once
+
+#include "ggml.h"
 #include "ggml-backend.h"
-#include "ggml-cpu-impl.h"
 
-// GGML internal header
-
-#if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
-ggml_backend_buffer_type_t ggml_backend_amx_buffer_type(void);
-#endif
+// Stub function - returns nullptr on non-Intel platforms
+static inline ggml_backend_buffer_type_t ggml_backend_amx_buffer_type(void) {
+    return nullptr;
+}

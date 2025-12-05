@@ -21,6 +21,9 @@ let package = Package(
             path: "Sources/llama",
             exclude: [], // We rely on the provided sources
             sources: ["src"],
+            resources: [
+                .process("Resources")
+            ],
             publicHeadersPath: "include",
             cSettings: [
                 .define("GGML_USE_ACCELERATE"),
@@ -28,17 +31,29 @@ let package = Package(
                 .define("ACCELERATE_LAPACK_ILP64"),
                 .define("GGML_USE_METAL"),
                 .define("GGML_USE_CPU"),
+                .define("GGML_VERSION", to: "\"b6906\""),
+                .define("GGML_COMMIT", to: "\"0de0a015\""),
                 .headerSearchPath("src"),
-                .unsafeFlags(["-O3", "-fno-objc-arc"]) // -fno-objc-arc might be needed for .m files if they are not ARC compliant (ggml-metal often is manual ref counting or C-like)
+                .headerSearchPath("src/ggml-cpu"),
+                .headerSearchPath("src/ggml-metal"),
+                .unsafeFlags(["-O3", "-fno-objc-arc"])
+            ],
+            cxxSettings: [
+                .define("GGML_USE_ACCELERATE"),
+                .define("ACCELERATE_NEW_LAPACK"),
+                .define("ACCELERATE_LAPACK_ILP64"),
+                .define("GGML_USE_METAL"),
+                .define("GGML_USE_CPU"),
+                .headerSearchPath("src"),
+                .headerSearchPath("src/ggml-cpu"),
+                .headerSearchPath("src/ggml-metal"),
+                .unsafeFlags(["-O3"])
             ],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("Metal"),
                 .linkedFramework("MetalKit"),
                 .linkedFramework("Foundation")
-            ],
-            resources: [
-                .process("Resources")
             ]
         ),
         .target(
@@ -49,5 +64,6 @@ let package = Package(
             name: "SwiftLlamaTests",
             dependencies: ["SwiftLlama"]
         ),
-    ]
+    ],
+    cxxLanguageStandard: .cxx17
 )
