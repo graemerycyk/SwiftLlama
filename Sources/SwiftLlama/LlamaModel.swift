@@ -220,27 +220,44 @@ class LlamaModel {
             embeddingBatch.add(token: token, position: Int32(i), seqIDs: [0], logit: false)
         }
         
-        // Enable embeddings mode
+        // Enable embeddings mode (in case not already enabled via Configuration)
         llama_set_embeddings(context, true)
         defer {
-            // Always restore to generation mode
-            llama_set_embeddings(context, false)
+            // Restore to previous mode if not configured for embeddings
+            if !configuration.embeddings {
+                llama_set_embeddings(context, false)
+            }
         }
         
-        // Decode to generate embeddings
-        guard llama_decode(context, embeddingBatch) == 0 else {
-            throw SwiftLlamaError.embeddingExtractionFailed("Failed to decode for embeddings")
+        // Use llama_encode() for embedding models instead of llama_decode()
+        // llama_encode is specifically designed for embedding extraction
+        guard llama_encode(context, embeddingBatch) == 0 else {
+            throw SwiftLlamaError.embeddingExtractionFailed("Failed to encode for embeddings")
         }
         
-        // Get the embedding pointer
-        guard let embeddingPtr = llama_get_embeddings(context) else {
-            throw SwiftLlamaError.embeddingExtractionFailed("Failed to get embeddings from context")
+        // Get the embedding pointer - use llama_get_embeddings_ith with -1 for last token
+        // This is the standard approach for embedding models like nomic-embed-text
+        guard let embeddingPtr = llama_get_embeddings_ith(context, -1) else {
+            // Fallback to llama_get_embeddings if ith fails
+            guard let fallbackPtr = llama_get_embeddings(context) else {
+                throw SwiftLlamaError.embeddingExtractionFailed("Failed to get embeddings from context")
+            }
+            return normalizeEmbedding(fallbackPtr, dimension: Int(embeddingDim))
         }
         
+        return normalizeEmbedding(embeddingPtr, dimension: Int(embeddingDim))
+    }
+    
+    /// Copy and normalize embedding from pointer
+    /// - Parameters:
+    ///   - ptr: Pointer to embedding floats
+    ///   - dimension: Number of dimensions in the embedding
+    /// - Returns: Normalized embedding vector
+    private func normalizeEmbedding(_ ptr: UnsafePointer<Float>, dimension: Int) -> [Float] {
         // Copy embeddings to Float array
-        var embedding = [Float](repeating: 0, count: Int(embeddingDim))
-        for i in 0..<Int(embeddingDim) {
-            embedding[i] = embeddingPtr[i]
+        var embedding = [Float](repeating: 0, count: dimension)
+        for i in 0..<dimension {
+            embedding[i] = ptr[i]
         }
         
         // Normalize the embedding vector (L2 normalization)
@@ -258,6 +275,12 @@ class LlamaModel {
         }
         
         return vector.map { $0 / magnitude }
+    }
+    
+    /// Get the embedding dimension of the loaded model
+    /// - Returns: The number of dimensions in the model's embeddings
+    func embeddingDimension() -> Int32 {
+        return llama_model_n_embd(model)
     }
 
     deinit {
