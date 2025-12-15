@@ -231,4 +231,20 @@ public class SwiftLlama {
     public func extractEmbedding(for text: String) async throws -> [Float] {
         return try model.extractEmbedding(for: text)
     }
+    
+    /// Convenience method to embed text - alias for extractEmbedding
+    /// - Parameter text: The input text to embed
+    /// - Returns: Normalized embedding vector as [Float] with magnitude ~1.0
+    /// - Throws: SwiftLlamaError if embedding extraction fails
+    @SwiftLlamaActor
+    public func embed(text: String) async throws -> [Float] {
+        return try model.extractEmbedding(for: text)
+    }
+    
+    /// Get the embedding dimension of the loaded model
+    /// - Returns: The number of dimensions in the model's embeddings (e.g., 768 for nomic-embed-text)
+    @SwiftLlamaActor
+    public func embeddingDimension() -> Int32 {
+        return model.embeddingDimension()
+    }
 }
